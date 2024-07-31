@@ -2,26 +2,27 @@ use std::{fs, path::PathBuf};
 
 use glob::glob;
 use reqwest::Client;
+use tracing::{debug, error, instrument};
 use url::Url;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct Patient {
     patient_dir: PathBuf,
     client: Client,
-    url: Url,
+    hds_url: Url,
 }
 
 impl Patient {
-    pub(crate) fn new(patient_dir: PathBuf, url: Url) -> Self {
+    pub(crate) fn new(patient_dir: PathBuf, hds_url: Url) -> Self {
         let client = Client::new();
-        println!("CD HDS URL: {url}");
         Self {
             patient_dir,
             client,
-            url,
+            hds_url,
         }
     }
 
+    #[instrument]
     pub(crate) async fn upload(&self) -> anyhow::Result<()> {
         let mut path = self.patient_dir.clone();
         path.push("**/*.json");
@@ -35,11 +36,11 @@ impl Patient {
         for patient in patients {
             let s = self.clone();
             tokio::spawn(async move {
-                println!("Send Patient: {}", patient.display());
+                debug!("Upload patient data for {}", patient.display());
                 let patient_data = fs::read_to_string(patient).unwrap();
                 let res = s
                     .client
-                    .post(s.url.to_string())
+                    .post(s.hds_url.to_string())
                     .header("Content-Type", "application/fhir+json")
                     .body(patient_data)
                     .send()
@@ -48,11 +49,11 @@ impl Patient {
                 match res {
                     Ok(res) => {
                         if let Err(e) = res.text().await {
-                            println!("Err: {e}")
+                            error!("Err: {e}")
                         }
                     }
                     Err(e) => {
-                        println!("Err {e}");
+                        error!("Err {e}");
                     }
                 }
             })

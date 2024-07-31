@@ -9,6 +9,8 @@ mod patient;
 use consent::Consent;
 use docker::Docker;
 use patient::Patient;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -36,6 +38,18 @@ struct Cli {
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
+    let stdout_log = tracing_subscriber::fmt::layer().pretty();
+
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env()?
+        .add_directive("prepare_dbs=debug".parse()?);
+
+    tracing_subscriber::registry()
+        .with(stdout_log)
+        .with(filter)
+        .init();
+
     let cli = Cli::parse();
     let patients_dir = cli.patients_dir;
 

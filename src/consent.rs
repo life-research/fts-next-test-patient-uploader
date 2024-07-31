@@ -1,10 +1,11 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
 use reqwest::Client;
+use tracing::{debug, error, instrument};
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct Consent {
     template: String,
     client: Client,
@@ -30,6 +31,7 @@ impl Consent {
         })
     }
 
+    #[instrument]
     pub(crate) async fn upload(&self) -> anyhow::Result<()> {
         let authored_dates = fs::read_to_string(&self.authored_dates)?;
         let authored_dates: HashMap<String, String> = serde_json::from_str(&authored_dates)?;
@@ -38,7 +40,7 @@ impl Consent {
             let id = id.clone();
             let authored = authored.clone();
             tokio::spawn(async move {
-                println!("Send Consent: {id}");
+                debug!("Upload consent for {id}");
                 let client = consent.client;
                 let template = consent.template;
                 let template = template.replace("$PATIENT_ID", &id);
@@ -59,11 +61,11 @@ impl Consent {
                 match res {
                     Ok(res) => {
                         if let Err(e) = res.text().await {
-                            println!("Err: {e}")
+                            error!("Err: {e}")
                         }
                     }
                     Err(e) => {
-                        println!("Err {e}");
+                        error!("Err {e}");
                     }
                 }
             })
