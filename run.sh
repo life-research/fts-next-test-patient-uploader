@@ -1,0 +1,1 @@
+cargo run --release -- -p ../../synthea/Synthea-MII-KDS/output/1722240304544/kds -d /home/trobanga/development/mii/fts-next/.github/test/compose.yaml -c /home/trobanga/development/mii/fts-next/.github/scripts/consent.tmpl.json
