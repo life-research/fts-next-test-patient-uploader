@@ -23,15 +23,31 @@ impl Patient {
     }
 
     #[instrument]
-    pub(crate) async fn upload(&self) -> anyhow::Result<()> {
+    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<()> {
         let mut path = self.patient_dir.clone();
-        path.push("**/*.json");
-        let patients = path
-            .to_str()
-            .iter()
-            .flat_map(|path| glob(path).unwrap_or_else(|_| panic!("Failed to read path {path}")))
-            .filter_map(|entry| entry.ok())
-            .collect::<Vec<PathBuf>>();
+        path.push("*.json");
+
+        let patients = ids.map_or_else(
+            || {
+                path.to_str()
+                    .iter()
+                    .flat_map(|path| {
+                        glob(path).unwrap_or_else(|_| panic!("Failed to read path {path}"))
+                    })
+                    .filter_map(Result::ok)
+                    .collect::<Vec<PathBuf>>()
+            },
+            |ids| {
+                path.to_str()
+                    .iter()
+                    .flat_map(|path| {
+                        glob(path).unwrap_or_else(|_| panic!("Failed to read path {path}"))
+                    })
+                    .filter_map(Result::ok)
+                    .filter(|p| ids.contains(&p.file_stem().unwrap().to_str().unwrap().to_string()))
+                    .collect::<Vec<PathBuf>>()
+            },
+        );
 
         for patient in patients {
             let s = self.clone();

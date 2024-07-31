@@ -32,9 +32,26 @@ impl Consent {
     }
 
     #[instrument]
-    pub(crate) async fn upload(&self) -> anyhow::Result<()> {
-        let authored_dates = fs::read_to_string(&self.authored_dates)?;
-        let authored_dates: HashMap<String, String> = serde_json::from_str(&authored_dates)?;
+    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<()> {
+        let authored_dates = ids.map_or_else(
+            || {
+                let authored_dates =
+                    fs::read_to_string(&self.authored_dates).expect("Cannot read authored.json");
+                let authored_dates: HashMap<String, String> =
+                    serde_json::from_str(&authored_dates).expect("Cannot parse JSON");
+                authored_dates
+            },
+            |ids| {
+                let authored_dates =
+                    fs::read_to_string(&self.authored_dates).expect("Cannot read authored.json");
+                let authored_dates: HashMap<String, String> =
+                    serde_json::from_str(&authored_dates).expect("Cannot parse JSON");
+                authored_dates
+                    .into_iter()
+                    .filter(|(k, _)| ids.contains(k))
+                    .collect::<HashMap<String, String>>()
+            },
+        );
         for (id, authored) in authored_dates.iter() {
             let consent = self.clone();
             let id = id.clone();
