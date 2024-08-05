@@ -1,8 +1,12 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{atomic::AtomicU32, Arc},
+};
 
 use glob::glob;
 use reqwest::Client;
-use tracing::{debug, error, instrument};
+use tracing::{error, instrument, trace};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -23,7 +27,7 @@ impl Patient {
     }
 
     #[instrument]
-    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<()> {
+    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<Arc<AtomicU32>> {
         let mut path = self.patient_dir.clone();
         path.push("*.json");
 
@@ -49,11 +53,14 @@ impl Patient {
             },
         );
 
+        let cnt = Arc::new(AtomicU32::new(0));
         for patient in patients {
             let s = self.clone();
+            let cnt = cnt.clone();
             tokio::spawn(async move {
-                debug!("Upload patient data for {}", patient.display());
+                trace!("Upload patient data for {}", patient.display());
                 let patient_data = fs::read_to_string(patient).unwrap();
+                trace!("Data len {}", patient_data.len());
                 let res = s
                     .client
                     .post(s.hds_url.to_string())
@@ -65,7 +72,9 @@ impl Patient {
                 match res {
                     Ok(res) => {
                         if let Err(e) = res.text().await {
-                            error!("Err: {e}")
+                            error!("Err: {e}");
+                        } else {
+                            cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                     Err(e) => {
@@ -75,6 +84,6 @@ impl Patient {
             })
             .await?;
         }
-        Ok(())
+        Ok(cnt)
     }
 }

@@ -9,7 +9,7 @@ mod patient;
 use consent::Consent;
 use docker::Docker;
 use patient::Patient;
-use tracing::level_filters::LevelFilter;
+use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
@@ -57,30 +57,28 @@ pub async fn main() -> anyhow::Result<()> {
         let authored_dates = fs::read_to_string(&authored_dates_file).expect("Cannot read file");
         let authored_dates: HashMap<String, String> =
             serde_json::from_str(&authored_dates).expect("Cannot parse JSON");
-        authored_dates
-            .keys()
-            .take(n)
-            .cloned()
-            .collect::<Vec<String>>()
+        let mut authored_dates = authored_dates.keys().cloned().collect::<Vec<String>>();
+        authored_dates.sort();
+        authored_dates.into_iter().take(n).collect::<Vec<String>>()
     });
 
-    let cd_hds_url = d.cd_hds_url()?;
+    let cd_hds_url = d.base_url("cd-hds", 8080)?.join("fhir")?;
+    info!("CD HDS URL: {cd_hds_url}");
     let mut patients_dir = data_dir.clone();
     patients_dir.push("kds");
     let ids_clone = ids.clone();
     let patient_handle = tokio::spawn(async move {
         let patient = Patient::new(patients_dir, cd_hds_url);
-        patient.upload(ids_clone).await.unwrap();
+        let cnt = patient.upload(ids_clone).await.unwrap();
+        info!("Transferred {:?} patients", cnt);
     });
 
+    let gics_url = d.base_url("gics", 8080).unwrap();
+    info!("gICS-web : {}", gics_url.clone().join("gics-web")?);
     let consent_handle = tokio::spawn(async move {
-        let consent = Consent::new(
-            cli.consent_template,
-            d.gics_url().unwrap(),
-            authored_dates_file,
-        )
-        .unwrap();
-        consent.upload(ids).await.unwrap();
+        let consent = Consent::new(cli.consent_template, gics_url, authored_dates_file).unwrap();
+        let cnt = consent.upload(ids).await.unwrap();
+        info!("Transferred {:?} consents", cnt);
     });
 
     patient_handle.await?;

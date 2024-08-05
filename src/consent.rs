@@ -1,7 +1,12 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::{atomic::AtomicU32, Arc},
+};
 
 use reqwest::Client;
-use tracing::{debug, error, instrument};
+use tracing::{error, instrument, trace};
 use url::Url;
 use uuid::Uuid;
 
@@ -21,7 +26,8 @@ impl Consent {
     ) -> anyhow::Result<Self> {
         let template = fs::read_to_string(template)?;
         let client = Client::new();
-        println!("gICS URL: {gics_url}");
+
+        let gics_url = gics_url.join("ttp-fhir/fhir/gics/$addConsent")?;
 
         Ok(Self {
             template,
@@ -32,7 +38,7 @@ impl Consent {
     }
 
     #[instrument]
-    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<()> {
+    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<Arc<AtomicU32>> {
         let authored_dates = ids.map_or_else(
             || {
                 let authored_dates =
@@ -52,12 +58,16 @@ impl Consent {
                     .collect::<HashMap<String, String>>()
             },
         );
+
+        let cnt = Arc::new(AtomicU32::new(0));
+
         for (id, authored) in authored_dates.iter() {
             let consent = self.clone();
             let id = id.clone();
             let authored = authored.clone();
+            let cnt = cnt.clone();
             tokio::spawn(async move {
-                debug!("Upload consent for {id}");
+                trace!("Upload consent for {id}");
                 let client = consent.client;
                 let template = consent.template;
                 let template = template.replace("$PATIENT_ID", &id);
@@ -78,7 +88,9 @@ impl Consent {
                 match res {
                     Ok(res) => {
                         if let Err(e) = res.text().await {
-                            error!("Err: {e}")
+                            error!("Err: {e}");
+                        } else {
+                            cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                     Err(e) => {
@@ -89,6 +101,11 @@ impl Consent {
             .await?;
         }
 
+        Ok(cnt)
+    }
+
+    pub(crate) fn check_transfer_successful(&self) -> anyhow::Result<()> {
+        // let url = self.gics_url.;
         Ok(())
     }
 }
