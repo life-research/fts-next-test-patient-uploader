@@ -1,5 +1,5 @@
 [package]
-name = "prepare_dbs"
+name = "upload_test_patients"
 version = "0.1.0"
 edition = "2021"
 
