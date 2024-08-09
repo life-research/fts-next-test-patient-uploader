@@ -1,12 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
     sync::{atomic::AtomicU32, Arc},
 };
 
 use reqwest::Client;
-use tracing::{error, instrument, trace};
+use tracing::{error, trace};
 use url::Url;
 use uuid::Uuid;
 
@@ -37,27 +37,15 @@ impl Consent {
         })
     }
 
-    #[instrument]
-    pub(crate) async fn upload(&self, ids: Option<Vec<String>>) -> anyhow::Result<Arc<AtomicU32>> {
-        let authored_dates = ids.map_or_else(
-            || {
-                let authored_dates =
-                    fs::read_to_string(&self.authored_dates).expect("Cannot read authored.json");
-                let authored_dates: HashMap<String, String> =
-                    serde_json::from_str(&authored_dates).expect("Cannot parse JSON");
-                authored_dates
-            },
-            |ids| {
-                let authored_dates =
-                    fs::read_to_string(&self.authored_dates).expect("Cannot read authored.json");
-                let authored_dates: HashMap<String, String> =
-                    serde_json::from_str(&authored_dates).expect("Cannot parse JSON");
-                authored_dates
-                    .into_iter()
-                    .filter(|(k, _)| ids.contains(k))
-                    .collect::<HashMap<String, String>>()
-            },
-        );
+    pub(crate) async fn upload(&self, ids: &Vec<String>) -> anyhow::Result<Arc<AtomicU32>> {
+        let authored_dates =
+            fs::read_to_string(&self.authored_dates).expect("Cannot read authored.json");
+        let authored_dates: HashMap<String, String> =
+            serde_json::from_str(&authored_dates).expect("Cannot parse JSON");
+        let authored_dates = authored_dates
+            .into_iter()
+            .filter(|(k, _)| ids.contains(k))
+            .collect::<HashMap<String, String>>();
 
         let cnt = Arc::new(AtomicU32::new(0));
 
@@ -104,8 +92,51 @@ impl Consent {
         Ok(cnt)
     }
 
-    pub(crate) fn check_transfer_successful(&self) -> anyhow::Result<()> {
-        // let url = self.gics_url.;
+    pub(crate) async fn check_transfer_successful(&self, ids: &Vec<String>) -> anyhow::Result<()> {
+        let url = self
+            .gics_url
+            .clone()
+            .join("/ttp-fhir/fhir/gics/$allConsentsForDomain")?;
+
+        let client = self.client.clone();
+        let body ="{\"resourceType\": \"Parameters\", \"parameter\": [{\"name\": \"domain\", \"valueString\": \"MII\"}]}";
+        let res = client
+            .post(url)
+            .header("Content-Type", "application/fhir+json")
+            .body(body)
+            .send()
+            .await?;
+
+        let text = res.text().await?;
+        let v: serde_json::Value = serde_json::from_str(&text)?;
+        let consent_entries = v["entry"].as_array().unwrap();
+
+        let mut ids: HashSet<String> = ids.clone().drain(..).collect();
+        tracing::debug!(?ids);
+        let n = ids.len();
+        for entry in consent_entries {
+            let resource = &entry["resource"];
+            let entries = resource["entry"].as_array().unwrap();
+            for entry in entries {
+                let resource = &entry["resource"];
+                let resource_type = &resource["resourceType"];
+                if resource_type == "Patient" {
+                    let id = match &resource["identifier"][0]["value"] {
+                        serde_json::Value::String(s) => s,
+                        _ => unreachable!(),
+                    };
+                    if !ids.remove(id) {
+                        tracing::warn!("Found unexpected consent with ID: {id}");
+                    }
+                }
+            }
+        }
+
+        tracing::info!("{} consents sucessfully uploaded", n - ids.len());
+        if !ids.is_empty() {
+            tracing::error!("{} consents not uploaded", ids.len());
+        }
+
         Ok(())
     }
 }

@@ -7,7 +7,6 @@ edition = "2021"
 anyhow = "1.0.86"
 chrono = "0.4.38"
 clap = { version = "4.5.11", features = ["derive"] }
-glob = "0.3.1"
 reqwest = "0.12.5"
 serde = { version = "1.0.204" }
 serde_json = "1.0.121"
