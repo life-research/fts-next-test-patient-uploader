@@ -10,6 +10,8 @@ use tracing::{error, trace};
 use url::Url;
 use uuid::Uuid;
 
+const PAGE_SIZE: usize = 100;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Consent {
     template: String,
@@ -92,7 +94,11 @@ impl Consent {
         Ok(cnt)
     }
 
-    pub(crate) async fn check_transfer_successful(&self, ids: &Vec<String>) -> anyhow::Result<()> {
+    pub(crate) async fn check_transfer_successful(&self, ids: Vec<String>) -> anyhow::Result<()> {
+        let mut ids: HashSet<String> = ids.clone().drain(..).collect();
+        tracing::trace!(?ids);
+        let n = ids.len();
+
         let url = self
             .gics_url
             .clone()
@@ -100,41 +106,59 @@ impl Consent {
 
         let client = self.client.clone();
         let body ="{\"resourceType\": \"Parameters\", \"parameter\": [{\"name\": \"domain\", \"valueString\": \"MII\"}]}";
-        let res = client
-            .post(url)
-            .header("Content-Type", "application/fhir+json")
-            .body(body)
-            .send()
-            .await?;
 
-        let text = res.text().await?;
-        let v: serde_json::Value = serde_json::from_str(&text)?;
-        let consent_entries = v["entry"].as_array().unwrap();
+        let mut offset = 0;
 
-        let mut ids: HashSet<String> = ids.clone().drain(..).collect();
-        tracing::debug!(?ids);
-        let n = ids.len();
-        for entry in consent_entries {
-            let resource = &entry["resource"];
-            let entries = resource["entry"].as_array().unwrap();
-            for entry in entries {
+        loop {
+            let mut url = url.clone();
+            url.query_pairs_mut()
+                .append_pair("_count", &format!("{PAGE_SIZE}"))
+                .append_pair("_offset", &format!("{offset}"));
+            let res = client
+                .post(url)
+                .header("Content-Type", "application/fhir+json")
+                .body(body)
+                .send()
+                .await?;
+
+            let text = res.text().await?;
+            let v: serde_json::Value = serde_json::from_str(&text)?;
+            let total = v["total"].as_u64().unwrap() as usize;
+
+            let next_offset = offset + PAGE_SIZE;
+            tracing::debug!("Checking {offset} to {next_offset} of {total} consents");
+
+            let consent_entries = v["entry"].as_array().unwrap();
+
+            for entry in consent_entries {
                 let resource = &entry["resource"];
-                let resource_type = &resource["resourceType"];
-                if resource_type == "Patient" {
-                    let id = match &resource["identifier"][0]["value"] {
-                        serde_json::Value::String(s) => s,
-                        _ => unreachable!(),
-                    };
-                    if !ids.remove(id) {
-                        tracing::warn!("Found unexpected consent with ID: {id}");
+                let entries = resource["entry"].as_array().unwrap();
+                for entry in entries {
+                    let resource = &entry["resource"];
+                    let resource_type = &resource["resourceType"];
+                    if resource_type == "Patient" {
+                        let id = match &resource["identifier"][0]["value"] {
+                            serde_json::Value::String(s) => s,
+                            _ => unreachable!(),
+                        };
+                        if !ids.remove(id) {
+                            tracing::warn!("Found unexpected consent with ID: {id}");
+                        }
                     }
                 }
+            }
+
+            if offset + PAGE_SIZE >= total {
+                break;
+            } else {
+                offset += PAGE_SIZE;
             }
         }
 
         tracing::info!("{} consents sucessfully uploaded", n - ids.len());
         if !ids.is_empty() {
             tracing::error!("{} consents not uploaded", ids.len());
+            tracing::error!("{ids:?}");
         }
 
         Ok(())
